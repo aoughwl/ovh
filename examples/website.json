@@ -1,0 +1,11 @@
+{
+  "$comment": "Smallest useful cluster: one cheap VPS serving a site from ./site over TLS.",
+  "cluster": "web",
+  "ovh": { "subsidiary": "FR", "maxMonthlyEUR": 10, "plan": "vps-2027-model1", "datacenter": "GRA", "os": "Debian 12" },
+  "access": { "sshKey": "~/.ssh/id_ed25519.pub", "sshFrom": ["0.0.0.0/0"] },
+  "nodes": { "web1": {} },
+  "ingress": { "nodes": ["web1"], "email": "you@example.com" },
+  "services": {
+    "site": { "build": "./site", "on": ["web1"], "port": 80, "routes": ["example.com"], "memory": "256m" }
+  }
+}

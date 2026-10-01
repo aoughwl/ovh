@@ -1,0 +1,7 @@
+nimcache/
+bin/
+*.exe
+tests/t*
+!tests/t*.nim
+tests/home/
+tests/out/

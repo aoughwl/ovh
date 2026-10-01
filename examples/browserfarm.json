@@ -1,0 +1,26 @@
+{
+  "$comment": "Two nodes on a WireGuard mesh. web1 is the ingress + a control API; the farm label runs isolated browser sessions. Sessions cannot reach each other, the host, or the mesh -- only the internet, each through its own pinned egress IP.",
+  "cluster": "farm",
+  "ovh": { "subsidiary": "FR", "maxMonthlyEUR": 30, "plan": "vps-2027-model1", "datacenter": "GRA", "os": "Debian 12" },
+  "access": { "sshKey": "~/.ssh/id_ed25519.pub", "sshFrom": ["0.0.0.0/0"] },
+  "mesh": { "cidr": "10.77.0.0/24", "port": 51820 },
+  "rollbackSeconds": 90,
+  "nodes": {
+    "web1":  { "labels": ["control"] },
+    "farm1": { "plan": "vps-le-2-2-40", "labels": ["farm"], "extraIps": ["203.0.113.10", "203.0.113.11"] }
+  },
+  "ingress": { "nodes": ["web1"], "email": "you@example.com" },
+  "firewall": { "rules": ["tcp dport 9100 ip saddr 10.77.0.0/24 accept"] },
+  "services": {
+    "control": {
+      "image": "nginx:alpine", "on": ["label:control"], "port": 80, "routes": ["farm.example.com"],
+      "secrets": { "API_TOKEN": "farm_api_token" }, "env": { "FARM_SIZE": "8" }
+    },
+    "browser": {
+      "build": "./browser", "on": ["label:farm"], "port": 9222,
+      "cpus": 1, "memory": "1g", "shmSize": "1g",
+      "pool": { "size": 8, "isolate": true, "internet": true, "maxLifetime": "30m",
+                "egressIps": ["203.0.113.10", "203.0.113.11"] }
+    }
+  }
+}

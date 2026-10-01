@@ -1,0 +1,22 @@
+#!/bin/sh
+# aowl-net NAME [--subnet CIDR] [--bridge IFNAME] [--internal]
+# Ensure a docker network exists. Session networks disable inter-container
+# traffic, so even two containers on one session network cannot talk.
+set -eu
+name=$1; shift
+subnet= ; bridge= ; internal=
+while [ $# -gt 0 ]; do
+  case $1 in
+    --subnet) subnet=$2; shift 2 ;;
+    --bridge) bridge=$2; shift 2 ;;
+    --internal) internal=--internal; shift ;;
+    *) echo "aowl-net: bad arg $1" >&2; exit 2 ;;
+  esac
+done
+docker network inspect "$name" >/dev/null 2>&1 && exit 0
+set -- --driver bridge --label aowl=1
+[ -n "$subnet" ] && set -- "$@" --subnet "$subnet"
+[ -n "$bridge" ] && set -- "$@" -o "com.docker.network.bridge.name=$bridge" \
+                              -o com.docker.network.bridge.enable_icc=false
+[ -n "$internal" ] && set -- "$@" --internal
+docker network create "$@" "$name" >/dev/null
