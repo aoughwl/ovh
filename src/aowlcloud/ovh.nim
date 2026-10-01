@@ -35,6 +35,12 @@ proc baseUrl*(endpoint: string): string =
   if endpoint.startsWith("http"): return endpoint.strip(chars = {'/'}, leading = false)
   raise newException(ValueError, "unknown OVH endpoint: " & endpoint)
 
+proc defaultSubsidiary*(endpoint: string): string =
+  case endpoint
+  of "ovh-us": "US"
+  of "ovh-ca": "CA"
+  else: "FR"
+
 proc credsPath*(): string = getHomeDir() / ".aowlcloud" / "ovh.json"
 
 proc loadCreds*(): OvhCreds =

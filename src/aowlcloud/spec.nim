@@ -116,11 +116,11 @@ proc parseSpec*(j: JsonNode, dir = "."): Spec =
 
   let ovhJ = j{"ovh"}
   var defPlan, defDc, defOs: string
-  result.subsidiary = "FR"
+  result.subsidiary = ""   # empty = follow the account's endpoint (US for ovh-us)
   if not ovhJ.isNil:
-    ovhJ.checkKeys("ovh", ["subsidiary", "maxMonthlyEUR", "plan", "datacenter", "os"])
-    result.subsidiary = ovhJ{"subsidiary"}.getStr("FR")
-    result.maxMonthlyEUR = ovhJ{"maxMonthlyEUR"}.getFloat(0)
+    ovhJ.checkKeys("ovh", ["subsidiary", "maxMonthly", "maxMonthlyEUR", "plan", "datacenter", "os"])
+    result.subsidiary = ovhJ{"subsidiary"}.getStr
+    result.maxMonthlyEUR = ovhJ{"maxMonthly"}.getFloat(ovhJ{"maxMonthlyEUR"}.getFloat(0))  # in the account currency
     defPlan = ovhJ{"plan"}.getStr
     defDc = ovhJ{"datacenter"}.getStr
     defOs = ovhJ{"os"}.getStr

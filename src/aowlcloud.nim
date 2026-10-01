@@ -8,9 +8,9 @@ const usage = """
 aowlcloud -- order, run and network OVH VPS from one spec file
 
 Part A: OVH lifecycle
-  auth --app-key K --app-secret S [--endpoint ovh-eu]   get a scoped consumer key
+  auth --app-key K --app-secret S [--endpoint ovh-us]   get a scoped consumer key
   whoami                                                 test credentials
-  catalog [--subsidiary FR] [--all]                      VPS plans, cheapest first
+  catalog [--subsidiary US] [--all]                      VPS plans, cheapest first
   vps list | info SN | console SN | reboot SN
   vps rescue SN on|off                                   out-of-band recovery boot
   vps rebuild SN --image NAME --yes-i-mean SN            WIPES the disk
@@ -136,14 +136,14 @@ proc cmdOrder(sp: Spec, st: var ClusterState, confirm: bool) =
     let ns = st.nodes.getOrDefault(n.name)
     if ns.serviceName != "" or ns.orderStatus == "pending":
       continue                                   # idempotent: never order twice
-    let q = o.quote(sp.subsidiary, n.plan, n.datacenter, n.os, "aowlcloud:" & sp.cluster & ":" & n.name)
+    let q = o.quote((if sp.subsidiary != "": sp.subsidiary else: defaultSubsidiary(o.creds.endpoint)), n.plan, n.datacenter, n.os, "aowlcloud:" & sp.cluster & ":" & n.name)
     let total = monthlyTotal(st) + q.withTaxEUR
     say n.name & ": " & n.plan & " @ " & n.datacenter & " (" & n.os & ") = " &
-        formatFloat(q.withTaxEUR, ffDecimal, 2) & " EUR incl. tax; cluster would be " &
+        formatFloat(q.withTaxEUR, ffDecimal, 2) & " incl. tax; cluster would be " &
         formatFloat(total, ffDecimal, 2) & "/month"
     for l in q.lines: say "    " & l
     if sp.maxMonthlyEUR <= 0 or total > sp.maxMonthlyEUR:
-      bad "  refused: over ovh.maxMonthlyEUR (" & $sp.maxMonthlyEUR & ")"
+      bad "  refused: over ovh.maxMonthly (" & $sp.maxMonthlyEUR & ")"
       continue
     if not confirm:
       warn "  dry run -- add --confirm to buy"
@@ -155,7 +155,7 @@ proc cmdOrder(sp: Spec, st: var ClusterState, confirm: bool) =
     s.monthlyEUR = q.withTaxEUR
     st.nodes[n.name] = s
     st.save()
-    audit "ORDER " & sp.cluster & "/" & n.name & " order=" & $s.orderId & " eur=" & $q.withTaxEUR
+    audit "ORDER " & sp.cluster & "/" & n.name & " order=" & $s.orderId & " price=" & $q.withTaxEUR
     say "  ordered #" & $s.orderId & (if ord{"url"}.getStr != "": "  pay/inspect: " & ord["url"].getStr else: "")
 
 proc cmdSync(sp: Spec, st: var ClusterState) =
@@ -298,8 +298,8 @@ proc main() =
       let me = client().get("/me")
       say me{"nichandle"}.getStr & "  " & me{"ovhSubsidiary"}.getStr
     of "catalog":
-      for p in client().catalog(a.flag("subsidiary", "FR"), a.has("all")):
-        say alignLeft(p.code, 44) & align(formatFloat(p.monthlyEUR, ffDecimal, 2), 8) & " EUR/mo  " &
+      for p in client().catalog(a.flag("subsidiary", defaultSubsidiary(loadCreds().endpoint)), a.has("all")):
+        say alignLeft(p.code, 44) & align(formatFloat(p.monthlyEUR, ffDecimal, 2), 8) & " " & p.currency & "/mo  " &
             p.datacenters.join(",")
     of "vps": cmdVps(a)
     else:

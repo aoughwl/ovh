@@ -23,7 +23,7 @@ them with a dead-man rollback.
 
 | Risk | What stops it |
 |---|---|
-| Buying by accident | `order` is a dry run that builds a real cart and prices it. `--confirm` is required to check out, and `ovh.maxMonthlyEUR` caps the whole cluster. |
+| Buying by accident | `order` is a dry run that builds a real cart and prices it. `--confirm` is required to check out, and `ovh.maxMonthly` (account currency) caps the whole cluster. |
 | Buying twice | A node with a pending order is never ordered again; state is in `~/.aowlcloud/clusters/`. |
 | Wiping a machine | `rebuild`/`terminate` need the VPS name typed back (`--yes-i-mean NAME`). Automatic bootstrap only rebuilds never-deployed nodes. |
 | Locking yourself out | Every apply arms a timer on the node **before** anything goes live. The controller must reconnect over a **new** SSH session and confirm; otherwise the node restores its last confirmed config (or bare SSH on a first apply). One unconfirmed node halts the rollout. |
@@ -37,11 +37,11 @@ Every money/destroy/apply action is appended to `~/.aowlcloud/audit.log`.
 
 ## Getting started
 
-1. Create an OVH application at https://eu.api.ovh.com/createApp/ (use `ca.`/`api.us.` for other accounts).
-2. `aowlcloud auth --app-key K --app-secret S`, then open the printed URL to approve a
+1. Create an OVH application. US account: https://api.us.ovhcloud.com/createApp/ (EU: eu.api.ovh.com, CA: ca.api.ovh.com).
+2. `aowlcloud auth --endpoint ovh-us --app-key K --app-secret S`, then open the printed URL to approve a
    **scoped** key: read everything; write only cart, VPS and order.
 3. `aowlcloud whoami` and `aowlcloud catalog` (the catalog needs no key).
-4. Copy an example spec, set `access.sshFrom` to your IP, and set `ovh.maxMonthlyEUR`.
+4. Copy an example spec, set `access.sshFrom` to your IP, and set `ovh.maxMonthly`.
 5. `aowlcloud order spec.json` to see the price. Then run `aowlcloud up spec.json --confirm`.
 
 Build: `nim c -o:bin/aowlcloud.exe src/aowlcloud.nim` (Nim 2.2, no packages).
@@ -51,7 +51,7 @@ Build: `nim c -o:bin/aowlcloud.exe src/aowlcloud.nim` (Nim 2.2, no packages).
 ```jsonc
 {
   "cluster": "farm",
-  "ovh":    { "subsidiary": "FR", "maxMonthlyEUR": 30, "plan": "vps-2027-model1", "datacenter": "GRA", "os": "Debian 12" },
+  "ovh":    { "maxMonthly": 30, "plan": "vps-2027-model1", "datacenter": "US-EAST-VA", "os": "Debian 12" },
   "access": { "sshKey": "~/.ssh/id_ed25519.pub", "sshFrom": ["203.0.113.5/32"] },
   "mesh":   { "cidr": "10.77.0.0/24", "port": 51820 },       // WireGuard between all nodes
   "rollbackSeconds": 90,
@@ -103,7 +103,7 @@ See `aowlcloud` with no arguments. Day to day: `plan` (diff vs. what is confirme
 - `wsl -u root -e bash tests/node_harness.sh`: real kernel nftables, `systemd-analyze verify`, pool wrappers, and the full apply/confirm/rollback state machine using the real node scripts. Runs inside a private mount+net namespace, so the host is untouched.
 
 Not yet exercised: a real OVH order, and Docker/WireGuard on a live node. The first `up` should be
-watched: a cheap VPS (about €4–5/mo) with `website.json`.
+watched: a cheap VPS (about $4–6/mo) with `website.json`.
 
 ## Limits
 

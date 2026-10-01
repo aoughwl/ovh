@@ -9,7 +9,8 @@ import ovh
 type
   Plan* = object
     code*: string
-    monthlyEUR*: float     ## catalog price, before tax
+    monthlyEUR*: float     ## catalog price, before tax, in `currency`
+    currency*: string
     datacenters*, oses*: seq[string]
 
   Quote* = object
@@ -34,8 +35,8 @@ proc catalog*(o: Ovh, subsidiary = "FR", all = false): seq[Plan] =
       if pr["interval"].getInt == 1 and "renew" in pr["capacities"].getElems.mapIt(it.getStr):
         price = pr["price"].getBiggestInt.float / 1e8
         break
-    if price < 0: continue
-    var plan = Plan(code: code, monthlyEUR: price)
+    if price <= 0 or code.startsWith("option"): continue
+    var plan = Plan(code: code, monthlyEUR: price, currency: c{"locale"}{"currencyCode"}.getStr)
     for cf in p{"configurations"}.getElems:
       let vals = cf{"values"}.getElems.mapIt(it.getStr)
       case cf["name"].getStr
@@ -77,7 +78,7 @@ proc quote*(o: Ovh, subsidiary, planCode, datacenter, osName, label: string): Qu
 proc checkout*(o: Ovh, q: Quote, confirm: bool): JsonNode =
   if not confirm:
     raise newException(GuardError, "checkout refused: pass --confirm to spend " &
-                       formatFloat(q.withTaxEUR, ffDecimal, 2) & " EUR")
+                       formatFloat(q.withTaxEUR, ffDecimal, 2) & "")
   o.post("/order/cart/" & q.cartId & "/checkout",
          %*{"autoPayWithPreferredPaymentMethod": true, "waiveRetractationPeriod": false})
 

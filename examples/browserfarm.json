@@ -1,7 +1,7 @@
 {
   "$comment": "Two nodes on a WireGuard mesh. web1 is the ingress + a control API; the farm label runs isolated browser sessions. Sessions cannot reach each other, the host, or the mesh -- only the internet, each through its own pinned egress IP.",
   "cluster": "farm",
-  "ovh": { "subsidiary": "FR", "maxMonthlyEUR": 30, "plan": "vps-2027-model1", "datacenter": "GRA", "os": "Debian 12" },
+  "ovh": { "maxMonthly": 30, "plan": "vps-2027-model1", "datacenter": "US-EAST-VA", "os": "Debian 12" },
   "access": { "sshKey": "~/.ssh/id_ed25519.pub", "sshFrom": ["0.0.0.0/0"] },
   "mesh": { "cidr": "10.77.0.0/24", "port": 51820 },
   "rollbackSeconds": 90,
