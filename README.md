@@ -91,6 +91,25 @@ not modelled), `pool`.
 
   Sessions can reach the internet only: not the host, the mesh, other sessions or private ranges. Replies to the mesh are allowed, so a controller can drive them. `maxLifetime` recycles a session into a fresh container.
 
+## Burst capacity: elastic groups (Public Cloud, hourly)
+
+VPS are monthly and arrive slowly. For capacity that follows demand, a spec
+declares **groups** of hourly Public Cloud instances:
+
+```jsonc
+"ovh": { "maxHourly": 0.50 },                   // cap on all members' summed $/hour
+"groups": {
+  "builders": { "region": "US-EAST-VA-1", "flavor": "d2-4", "image": "Debian 12",
+                "min": 0, "max": 10, "labels": ["builder"], "scaleDownAfter": "10m" }
+},
+"services": { "build": { "image": "…", "on": ["label:builders"], "pool": { "size": 2 } } }
+```
+
+- `aowlcloud scale spec.json builders 3 --confirm` creates or deletes members. Each member boots with the bootstrap script as cloud-init user-data (no reinstall step), joins the mesh, and gets every service whose `on` matches its labels. All other nodes are re-applied so their mesh peers and firewalls learn about the change.
+- `aowlcloud autoscale spec.json builders --demand "CMD" --confirm` runs CMD every `--interval` seconds; it prints the wanted member count, for example a queue depth. The group grows at once and shrinks only after a member has been surplus for `scaleDownAfter`. It is clamped to `min`..`max` and refused above `maxHourly`.
+- Members are recorded in state **before** waiting on them, so a crash never leaves an untracked, still-billing instance. Deletion only touches instance ids aowlcloud recorded. Anything else in the project is listed as "not ours" and never touched.
+- Setup: `aowlcloud cloud create-project --confirm` (the project is free, billing is per hour), then `cloud regions`.
+
 ## Commands
 
 See `aowlcloud` with no arguments. Day to day: `plan` (diff vs. what is confirmed), `apply`,

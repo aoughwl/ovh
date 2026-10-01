@@ -3,7 +3,7 @@
 ## which validates them against a real kernel/nft/systemd in WSL.
 
 import std/[unittest, json, os, strutils, tables, sequtils, osproc]
-import ../src/aowlcloud/[ovh, spec, state, render, tarball]
+import ../src/aowlcloud/[ovh, spec, state, render, tarball, scale]
 
 const ex = currentSourcePath().parentDir.parentDir / "examples"
 let outDir = currentSourcePath().parentDir / "out"
@@ -157,3 +157,40 @@ suite "tar":
     check code == 0
     check "-rwxr-xr-x" in o and "node/apply.sh" in o
     check "-rw-------" in o
+
+suite "groups":
+  proc gspec(extra: JsonNode = nil): JsonNode =
+    result = %*{"cluster": "g", "access": {"sshFrom": ["0.0.0.0/0"]},
+      "ovh": {"plan": "p", "datacenter": "US-EAST-VA", "os": "Debian 12", "maxHourly": 0.5},
+      "nodes": {"ctl": {}},
+      "groups": {"builders": {"region": "US-EAST-VA-1", "flavor": "d2-4", "min": 0, "max": 4}},
+      "services": {"build": {"image": "builder", "on": ["label:builders"], "port": 8080}}}
+  test "groups spend hourly, so a cap is required":
+    var j = gspec(); j["ovh"].delete("maxHourly")
+    expectSpecError(j, "maxHourly")
+  test "min/max sanity":
+    var j = gspec(); j["groups"]["builders"]["min"] = %5
+    expectSpecError(j, "min <= max")
+  test "members become nodes: services land on them, peers mesh with them":
+    let sp = parseSpec(gspec(), ex)
+    var st = ClusterState(name: "g")
+    st.nodes["ctl"] = NodeState(ip: "198.51.100.1", wgPub: "PUBctl=", bootstrapped: true)
+    st.nodes["builders-1"] = NodeState(group: "builders", instanceId: "i-1", ip: "198.51.100.50",
+                                       meshIp: "10.77.0.100", wgPub: "PUBb1=", bootstrapped: true)
+    let full = sp.withMembers(memberTuples(st))
+    check "builders-1" in full.nodes
+    check nodesFor(full, full.services["build"]) == @["builders-1"]
+    var w: seq[string]
+    let ctl = renderNode(full, st, "ctl", newJObject(), w)
+    check "Endpoint = 198.51.100.50:51820" in ctl["wg0.conf"]
+    check "AllowedIPs = 10.77.0.100/32" in ctl["wg0.conf"]
+    check "198.51.100.50" in ctl["nftables.nft"]           # mesh port opened to the new peer
+    let b = renderNode(full, st, "builders-1", newJObject(), w)
+    check "-p 10.77.0.100:20000:8080" in b["units/aowl-build.service"]
+  test "a member whose group left the spec is not rendered":
+    let sp = parseSpec(gspec(), ex)
+    var st = ClusterState(name: "g")
+    st.nodes["old-1"] = NodeState(group: "old", ip: "1.1.1.1", meshIp: "10.77.0.101")
+    check "old-1" notin sp.withMembers(memberTuples(st)).nodes
+  test "demand command":
+    check demand("echo 7") == 7

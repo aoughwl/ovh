@@ -117,7 +117,8 @@ const defaultRules* = [
   ("GET", "/*"),
   ("POST", "/order/cart"), ("POST", "/order/cart/*"), ("DELETE", "/order/cart/*"),
   ("POST", "/vps/*"), ("PUT", "/vps/*"), ("DELETE", "/vps/*"),
-  ("POST", "/me/order/*")]
+  ("POST", "/me/order/*"),
+  ("POST", "/cloud/project/*"), ("PUT", "/cloud/project/*"), ("DELETE", "/cloud/project/*")]
 
 proc requestCredential*(o: Ovh, redirect = ""): (string, string) =
   ## Returns (consumerKey, validationUrl). The user opens the URL once to approve.

@@ -2,7 +2,7 @@
 ## control (part B). See README.md.
 
 import std/[os, strutils, json, tables, sequtils, times, terminal]
-import aowlcloud/[ovh, vps, state, spec, render, remote]
+import aowlcloud/[ovh, vps, state, spec, render, remote, cloud, scale]
 
 const usage = """
 aowlcloud -- order, run and network OVH VPS from one spec file
@@ -17,6 +17,9 @@ Part A: OVH lifecycle
   vps rebuild SN --image NAME --yes-i-mean SN            WIPES the disk
   vps terminate SN --yes-i-mean SN                       OVH emails a token
   vps confirm-terminate SN --token T --yes-i-mean SN
+
+Public Cloud (hourly, for elastic groups)
+  cloud projects | create-project [--confirm] | regions | instances
 
 Part B: the cluster, from SPEC (a JSON file)
   check SPEC                     validate the spec
@@ -33,6 +36,10 @@ Part B: the cluster, from SPEC (a JSON file)
   ssh SPEC NODE [CMD...]
   logs SPEC NODE UNIT
   rollback SPEC NODE             restore the previous confirmed config now
+  scale SPEC GROUP N [--confirm] set a group's size; re-applies the mesh
+  autoscale SPEC GROUP --demand CMD [--interval 30] --confirm
+                                 loop: CMD prints wanted members; grow at once,
+                                 shrink after the group's scaleDownAfter
 
 Credentials: ~/.aowlcloud/ovh.json or OVH_* env. Secrets for services:
 ~/.aowlcloud/secrets/<cluster>.json. Nothing secret lives in the spec.
@@ -303,12 +310,32 @@ proc main() =
         say alignLeft(p.code, 44) & align(formatFloat(p.monthlyEUR, ffDecimal, 2), 8) & " " & p.currency & "/mo  " &
             p.datacenters.join(",")
     of "vps": cmdVps(a)
+    of "cloud":
+      let o = client()
+      case a.need(1, "cloud subcommand")
+      of "projects":
+        for p in o.projects(): say p
+      of "create-project":
+        let r = o.createProject(defaultSubsidiary(o.creds.endpoint), "aowlcloud", a.has("confirm"))
+        if r{"dryRun"}.getBool:
+          warn "dry run: a project costs " & $r["price"] & " but enables hourly billing -- add --confirm"
+        else:
+          audit "CLOUD-PROJECT order=" & $r{"orderId"}
+          say "project ordered #" & $r{"orderId"} & " -- `cloud projects` once delivered"
+      of "regions":
+        for r in o.regions(o.resolveProject(a.flag("project"))): say r
+      of "instances":
+        for i in o.instances(o.resolveProject(a.flag("project"))):
+          say alignLeft(i.name, 32) & alignLeft(i.status, 10) & alignLeft(i.region, 14) & i.ip &
+              (if i.name.startsWith("aowl-"): "" else: "   (not ours: never touched)")
+      else: quit usage, 2
     of "api":   # raw signed call, for anything not modelled: api GET /me [JSON body]
       let body = if a.pos.len > 3: parseJson(a.pos[3]) else: nil
       say pretty(client().call(a.need(1, "METHOD").toUpperAscii, a.need(2, "PATH"), body))
     else:
-      let sp = loadSpec(a.need(1, "SPEC"))
-      var st = state.load(sp.cluster)
+      let base = loadSpec(a.need(1, "SPEC"))
+      var st = state.load(base.cluster)
+      var sp = base.withMembers(memberTuples(st))
       case a.pos[0]
       of "check":
         var w: seq[string]
@@ -344,6 +371,27 @@ proc main() =
         let r = ssh(targetFor(sp, st, a.need(2, "NODE")), "journalctl -n 200 --no-pager -u " &
                     quoteShell(a.need(3, "UNIT")))
         echo r.output
+      of "scale":
+        let g = a.need(2, "GROUP")
+        if scaleTo(client(), sp, st, g, parseInt(a.need(3, "N")), a.has("confirm"), say):
+          sp = base.withMembers(memberTuples(st))
+          if not cmdApply(sp, st, ""): quit 1
+      of "autoscale":
+        let g = a.need(2, "GROUP")
+        if not a.has("confirm"): quit "autoscale spends money unattended: pass --confirm", 2
+        if not a.has("demand"): quit "--demand CMD is required (prints the wanted member count)", 2
+        let o = client()
+        let interval = parseInt(a.flag("interval", "30"))
+        say "autoscaling " & g & " every " & $interval & "s; ctrl-c to stop (members stay)"
+        while true:
+          try:
+            let want = demand(a.flag("demand"))
+            if autoscaleTick(o, sp, st, g, want, say):
+              sp = base.withMembers(memberTuples(st))
+              discard cmdApply(sp, st, "")
+          except ScaleError, OvhError, CloudError:
+            bad getCurrentExceptionMsg()   # keep looping; a bad tick must not kill the scaler
+          sleep interval * 1000
       of "rollback":
         let node = a.need(2, "NODE")
         audit "ROLLBACK " & sp.cluster & "/" & node
@@ -354,5 +402,7 @@ proc main() =
   except SpecError as e: bad "spec: " & e.msg; quit 1
   except GuardError as e: bad e.msg; quit 1
   except OvhError as e: bad "OVH: " & e.msg; quit 1
+  except CloudError as e: bad e.msg; quit 1
+  except ScaleError as e: bad e.msg; quit 1
 
 when isMainModule: main()

@@ -45,6 +45,15 @@ type
     meshIp*: string
     extraIps*: seq[string]
 
+  Group* = object
+    ## Elastic set of hourly Public Cloud instances. Members are named
+    ## <group>-<n>, carry the group's labels plus the group name as a label,
+    ## and get mesh addresses from .100 upward.
+    name*, region*, flavor*, image*: string
+    min*, max*: int
+    labels*: seq[string]
+    scaleDownAfterSec*: int ## a surplus member must stay surplus this long before deletion
+
   Spec* = object
     cluster*: string
     dir*: string            ## directory of the spec file; build paths resolve here
@@ -60,6 +69,9 @@ type
     ingressEmail*: string
     rawRules*: seq[string]  ## verbatim nft rules appended to the input chain
     rollbackSec*: int
+    groups*: OrderedTable[string, Group]
+    cloudProject*: string
+    maxHourly*: float       ## cap on the summed hourly price of all group members
 
 proc fail(msg: string) = raise newException(SpecError, msg)
 
@@ -99,6 +111,8 @@ proc parseDuration(s, where: string): int =
   of 'h': n * 3600
   else: (fail(where & ": duration needs s/m/h suffix: " & s); 0)
 
+const dynamicMeshStart* = 100   ## group members get mesh .100 and up
+
 proc meshAddr*(cidr: string, idx: int): string =
   ## idx-th host address inside an IPv4 /24-or-larger mesh (1-based).
   let base = cidr.split('/')[0].split('.').mapIt(parseInt(it))
@@ -106,7 +120,7 @@ proc meshAddr*(cidr: string, idx: int): string =
   [v shr 24 and 255, v shr 16 and 255, v shr 8 and 255, v and 255].mapIt($it).join(".")
 
 proc parseSpec*(j: JsonNode, dir = "."): Spec =
-  j.checkKeys("spec", ["cluster", "ovh", "access", "mesh", "nodes", "services",
+  j.checkKeys("spec", ["cluster", "ovh", "access", "mesh", "nodes", "groups", "services",
                        "ingress", "firewall", "rollbackSeconds", "$comment"])
   result.dir = dir
   result.cluster = j{"cluster"}.getStr
@@ -118,7 +132,10 @@ proc parseSpec*(j: JsonNode, dir = "."): Spec =
   var defPlan, defDc, defOs: string
   result.subsidiary = ""   # empty = follow the account's endpoint (US for ovh-us)
   if not ovhJ.isNil:
-    ovhJ.checkKeys("ovh", ["subsidiary", "maxMonthly", "maxMonthlyEUR", "plan", "datacenter", "os"])
+    ovhJ.checkKeys("ovh", ["subsidiary", "maxMonthly", "maxMonthlyEUR", "plan", "datacenter", "os",
+                          "cloudProject", "maxHourly"])
+    result.cloudProject = ovhJ{"cloudProject"}.getStr
+    result.maxHourly = ovhJ{"maxHourly"}.getFloat(0)
     result.subsidiary = ovhJ{"subsidiary"}.getStr
     result.maxMonthlyEUR = ovhJ{"maxMonthly"}.getFloat(ovhJ{"maxMonthlyEUR"}.getFloat(0))  # in the account currency
     defPlan = ovhJ{"plan"}.getStr
@@ -166,6 +183,22 @@ proc parseSpec*(j: JsonNode, dir = "."): Spec =
       if not isIpAddress(ip): fail("nodes." & name & ".extraIps: bad IP " & ip)
     result.nodes[name] = node
 
+  if idx >= dynamicMeshStart: fail("nodes: at most " & $(dynamicMeshStart - 1) & " static nodes")
+  for name, g in j{"groups"}.getFields:
+    let w = "groups." & name
+    if not validName(name) or name in result.nodes: fail(w & ": bad or duplicate name")
+    g.checkKeys(w, ["region", "flavor", "image", "min", "max", "labels", "scaleDownAfter"])
+    var gr = Group(name: name, region: g{"region"}.getStr, flavor: g{"flavor"}.getStr,
+      image: g{"image"}.getStr("Debian 12"), min: g{"min"}.getInt(0), max: g{"max"}.getInt(0),
+      labels: g{"labels"}.strs(w & ".labels"),
+      scaleDownAfterSec: parseDuration(g{"scaleDownAfter"}.getStr("10m"), w & ".scaleDownAfter"))
+    if gr.region == "" or gr.flavor == "": fail(w & ": needs region and flavor")
+    if gr.max < 1 or gr.min < 0 or gr.min > gr.max: fail(w & ": need 0 <= min <= max, max >= 1")
+    if name notin gr.labels: gr.labels.add name
+    result.groups[name] = gr
+  if result.groups.len > 0 and result.maxHourly <= 0:
+    fail("ovh.maxHourly: groups spend by the hour; set a cap (account currency per hour)")
+
   let ing = j{"ingress"}
   if not ing.isNil:
     ing.checkKeys("ingress", ["nodes", "email"])
@@ -196,6 +229,8 @@ proc parseSpec*(j: JsonNode, dir = "."): Spec =
     if svc.placeOn.len == 0: fail(w & ".on: which nodes? (names or \"label:x\")")
     for p in svc.placeOn:
       if not p.startsWith("label:") and p notin result.nodes: fail(w & ".on: unknown node " & p)
+      if p.startsWith("label:") and toSeq(result.groups.values).anyIt(p[6..^1] in it.labels) and svc.public.len > 0:
+        fail(w & ": services on elastic groups cannot publish fixed public ports")
     if svc.routes.len > 0:
       if svc.port == 0: fail(w & ": routes need a container port")
       if result.ingressNodes.len == 0: fail(w & ": routes need ingress.nodes")
@@ -238,3 +273,11 @@ proc nodesFor*(sp: Spec, svc: Service): seq[string] =
     for p in svc.placeOn:
       if p == n.name or (p.startsWith("label:") and p[6..^1] in n.labels):
         if n.name notin result: result.add n.name
+
+proc withMembers*(sp: Spec, members: openArray[(string, string, string, string)]): Spec =
+  ## Spec plus the live group members (name, group, ip, meshIp) as nodes, so
+  ## rendering, mesh and apply treat them like any other node.
+  result = sp
+  for (name, group, ip, mesh) in members:
+    if group notin sp.groups or ip == "" or mesh == "": continue
+    result.nodes[name] = Node(name: name, host: ip, labels: sp.groups[group].labels, meshIp: mesh)

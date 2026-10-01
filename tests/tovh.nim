@@ -2,7 +2,8 @@
 ## the guards that stand between a command and money/destruction.
 
 import std/[unittest, asynchttpserver, asyncdispatch, json, sequtils, locks]
-import ../src/aowlcloud/[ovh, vps]
+import std/[os, tables, times, strutils]
+import ../src/aowlcloud/[ovh, vps, spec, state, scale]
 
 var gLock: Lock
 var gCalls: seq[string]
@@ -36,6 +37,9 @@ proc serve(port: int) {.thread.} =
         withLock gLock: gCalls.add "option " & parseJson(req.body)["planCode"].getStr
     elif key == "POST /1.0/order/cart/c1/checkout": body = $(%*{"orderId": 42, "url": "https://x/42"})
     elif key == "POST /1.0/vps/vps-1/terminate": body = "\"ok\""
+    elif key == "GET /1.0/order/catalog/public/cloud":
+      body = $(%*{"addons": [{"planCode": "d2-4.consumption", "pricings": [{"price": 2560000}]}]})
+    elif key == "GET /1.0/cloud/project": body = $(%*["proj"])
     await req.respond(Http200, body, newHttpHeaders({"Content-Type": "application/json"}))
   let s = newAsyncHttpServer()
   waitFor s.serve(Port(port), cb)
@@ -89,3 +93,59 @@ suite "destruction guards":
     check "POST /1.0/vps/vps-1/terminate" in taken()
   test "rebuild needs the exact name typed back":
     expect GuardError: discard o.rebuild("vps-1", "Debian 12", "ssh-ed25519 x", "", "")
+
+suite "elastic groups (mock)":
+  putEnv("AOWLCLOUD_HOME", getTempDir() / "aowl-tovh-home")
+  let sp = parseSpec(%*{"cluster": "g", "access": {"sshFrom": ["0.0.0.0/0"]},
+    "ovh": {"plan": "p", "datacenter": "US-EAST-VA", "os": "Debian 12", "maxHourly": 0.06},
+    "nodes": {"ctl": {}},
+    "groups": {"builders": {"region": "US-EAST-VA-1", "flavor": "d2-4", "min": 1, "max": 4, "scaleDownAfter": "60s"}},
+    "services": {}})
+  proc st3(): ClusterState =
+    result.name = "g"
+    for i in 1..3:
+      result.nodes["builders-" & $i] = NodeState(group: "builders", instanceId: "i-" & $i, ip: "x",
+        meshIp: "10.77.0." & $(99 + i), hourly: 0.0256, createdAt: 1000 + i)
+    result.nodes["ctl"] = NodeState(ip: "y")
+  var logs: seq[string]
+  proc log(s: string) = logs.add s
+
+  test "price comes from the catalog; over the hourly cap is refused before any create":
+    var st = st3()
+    discard taken()
+    expect ScaleError: discard scaleTo(o, sp, st, "builders", 4, true, log)   # 4*0.0256 > 0.06
+    check taken().allIt(not it.startsWith("POST /1.0/cloud"))
+  test "dry run changes nothing":
+    var st = st3()
+    check not scaleTo(o, sp, st, "builders", 1, false, log)
+    check members(st, "builders").len == 3
+  test "scale down deletes newest first and only recorded ids":
+    var st = st3()
+    discard taken()
+    check scaleTo(o, sp, st, "builders", 1, true, log)
+    let c = taken()
+    check "DELETE /1.0/cloud/project/proj/instance/i-3" in c
+    check "DELETE /1.0/cloud/project/proj/instance/i-2" in c
+    check "DELETE /1.0/cloud/project/proj/instance/i-1" notin c
+    check members(st, "builders") == @["builders-1"]
+  test "min is a floor even if demand is 0":
+    var st = st3()
+    discard scaleTo(o, sp, st, "builders", 0, true, log)
+    check members(st, "builders").len == 1
+  test "autoscale waits scaleDownAfter before shrinking":
+    var st = st3()
+    discard taken()
+    check not autoscaleTick(o, sp, st, "builders", 2, log)       # first sight of surplus: mark only
+    check st.nodes["builders-3"].surplusSince > 0
+    check st.nodes["builders-2"].surplusSince == 0
+    check taken().allIt(not it.startsWith("DELETE"))
+    st.nodes["builders-3"].surplusSince = getTime().toUnix - 61   # pretend a minute passed
+    check autoscaleTick(o, sp, st, "builders", 2, log)
+    check "DELETE /1.0/cloud/project/proj/instance/i-3" in taken()
+    check members(st, "builders").len == 2
+  test "demand back up clears the surplus mark":
+    var st = st3()
+    discard autoscaleTick(o, sp, st, "builders", 2, log)
+    check st.nodes["builders-3"].surplusSince > 0
+    discard autoscaleTick(o, sp, st, "builders", 3, log)
+    check st.nodes["builders-3"].surplusSince == 0
