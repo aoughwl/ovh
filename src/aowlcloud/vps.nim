@@ -59,6 +59,26 @@ proc quote*(o: Ovh, subsidiary, planCode, datacenter, osName, label: string): Qu
   let item = o.post(cp & "/vps", %*{"planCode": planCode, "duration": "P1M",
                                      "pricingMode": "default", "quantity": 1})
   result.itemId = item["itemId"].getBiggestInt
+  # Some plans (e.g. US 2027 models) refuse checkout until every *mandatory*
+  # add-on family has an option. Take the cheapest monthly option of each.
+  let opts = o.get(cp & "/vps/options", [("planCode", planCode)])
+  var best: seq[(string, string, float)]   # family, planCode, price
+  for op in opts.getElems:
+    if not op{"mandatory"}.getBool: continue
+    for pr in op{"prices"}.getElems:
+      if pr{"duration"}.getStr == "P1M" and pr{"pricingMode"}.getStr == "default":
+        let fam = op["family"].getStr
+        let price = pr{"price"}{"value"}.getFloat
+        var found = false
+        for b in best.mitems:
+          if b[0] == fam:
+            found = true
+            if price < b[2]: b = (fam, op["planCode"].getStr, price)
+        if not found: best.add (fam, op["planCode"].getStr, price)
+  for (fam, code, price) in best:
+    discard o.post(cp & "/vps/options", %*{"itemId": result.itemId, "planCode": code,
+      "duration": "P1M", "pricingMode": "default", "quantity": 1})
+    result.lines.add "required " & fam & ": " & code & " (" & formatFloat(price, ffDecimal, 2) & "/mo)"
   let ip = cp & "/item/" & $result.itemId
   for req in o.get(ip & "/requiredConfiguration"):
     let lbl = req["label"].getStr

@@ -10,6 +10,7 @@ aowlcloud -- order, run and network OVH VPS from one spec file
 Part A: OVH lifecycle
   auth --app-key K --app-secret S [--endpoint ovh-us]   get a scoped consumer key
   whoami                                                 test credentials
+  api METHOD PATH [JSON]                                 raw signed call
   catalog [--subsidiary US] [--all]                      VPS plans, cheapest first
   vps list | info SN | console SN | reboot SN
   vps rescue SN on|off                                   out-of-band recovery boot
@@ -302,6 +303,9 @@ proc main() =
         say alignLeft(p.code, 44) & align(formatFloat(p.monthlyEUR, ffDecimal, 2), 8) & " " & p.currency & "/mo  " &
             p.datacenters.join(",")
     of "vps": cmdVps(a)
+    of "api":   # raw signed call, for anything not modelled: api GET /me [JSON body]
+      let body = if a.pos.len > 3: parseJson(a.pos[3]) else: nil
+      say pretty(client().call(a.need(1, "METHOD").toUpperAscii, a.need(2, "PATH"), body))
     else:
       let sp = loadSpec(a.need(1, "SPEC"))
       var st = state.load(sp.cluster)

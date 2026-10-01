@@ -25,6 +25,15 @@ proc serve(port: int) {.thread.} =
       body = $(%*[{"label": "vps_datacenter", "required": true}, {"label": "vps_os", "required": true}])
     elif key == "GET /1.0/order/cart/c1/checkout":
       body = $(%*{"prices": {"withTax": {"value": 5.39}}, "details": [{"description": "VPS", "totalPrice": {"text": "5.39 EUR"}}]})
+    elif key == "GET /1.0/order/cart/c1/vps/options":
+      body = $(%*[
+        {"family": "storage", "mandatory": true, "planCode": "st-free", "prices": [{"duration": "P1M", "pricingMode": "default", "price": {"value": 0.0}}]},
+        {"family": "backup", "mandatory": true, "planCode": "bk-7", "prices": [{"duration": "P1M", "pricingMode": "default", "price": {"value": 1.4}}]},
+        {"family": "backup", "mandatory": true, "planCode": "bk-1", "prices": [{"duration": "P1M", "pricingMode": "default", "price": {"value": 0.5}}]},
+        {"family": "cpanel", "mandatory": false, "planCode": "cp", "prices": [{"duration": "P1M", "pricingMode": "default", "price": {"value": 22.0}}]}])
+    elif key == "POST /1.0/order/cart/c1/vps/options":
+      {.cast(gcsafe).}:
+        withLock gLock: gCalls.add "option " & parseJson(req.body)["planCode"].getStr
     elif key == "POST /1.0/order/cart/c1/checkout": body = $(%*{"orderId": 42, "url": "https://x/42"})
     elif key == "POST /1.0/vps/vps-1/terminate": body = "\"ok\""
     await req.respond(Http200, body, newHttpHeaders({"Content-Type": "application/json"}))
@@ -48,9 +57,13 @@ suite "ordering":
     discard taken()
     let q = o.quote("FR", "vps-2027-model1", "GRA", "Debian 12", "aowlcloud:t:a")
     check q.withTaxEUR == 5.39
+    check q.lines.len >= 2   # the chosen mandatory add-ons are shown
     let c = taken().filterIt(it != "GET /1.0/auth/time")
     check c == @["POST /1.0/order/cart", "POST /1.0/order/cart/c1/assign",
                  "POST /1.0/order/cart/c1/vps",
+                 "GET /1.0/order/cart/c1/vps/options",
+                 "POST /1.0/order/cart/c1/vps/options", "option st-free",
+                 "POST /1.0/order/cart/c1/vps/options", "option bk-1",
                  "GET /1.0/order/cart/c1/item/7/requiredConfiguration",
                  "POST /1.0/order/cart/c1/item/7/configuration",
                  "POST /1.0/order/cart/c1/item/7/configuration",
