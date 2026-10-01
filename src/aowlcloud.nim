@@ -90,7 +90,7 @@ proc cmdAuth(a: Args) =
   c.consumerKey = ck
   saveCreds(c)
   say "saved to " & credsPath()
-  say "approve the key (scoped: read all; write only cart/VPS/order) at:\n  " & url
+  say "approve the key (scoped: read all; write only cart, VPS, order, Public Cloud) at:\n  " & url
 
 proc cmdVps(a: Args) =
   let o = client()
